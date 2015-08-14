@@ -18,7 +18,7 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
       setnx conn mutex id >>= function
         | true -> expire conn mutex ltime >>= fun _ -> IO.return ()
         | _ -> update_ttl () >>= fun _ ->
-            if Unix.time() < etime then IO.sleep(0.1) >>= loop
+            if Unix.time() < etime then IO.sleep 0.5 >>= loop
             else IO.fail (Error ("could not acquire lock " ^ mutex))
     in
     loop ()

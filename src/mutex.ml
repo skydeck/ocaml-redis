@@ -14,14 +14,17 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
         | None -> expire conn mutex ltime >>= fun _ -> IO.return ()
         | _ -> IO.return () in
 
-    let rec loop () =
+    let rec loop sleep_amount =
       setnx conn mutex id >>= function
         | true -> expire conn mutex ltime >>= fun _ -> IO.return ()
         | _ -> update_ttl () >>= fun _ ->
-            if Unix.time() < etime then IO.sleep 0.5 >>= loop
-            else IO.fail (Error ("could not acquire lock " ^ mutex))
+            if Unix.time() < etime then
+              IO.sleep (sleep_amount +. Random.float 0.2)
+              >>= loop (2. *. sleep_amount)
+            else
+              IO.fail (Error ("could not acquire lock " ^ mutex))
     in
-    loop ()
+    loop 0.2
 
   let release conn mutex id =
     watch conn [mutex] >>= fun _ -> get conn mutex >>= function

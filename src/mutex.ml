@@ -22,7 +22,7 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
       | _ ->
           update_ttl () >>= fun _ ->
           if Unix.gettimeofday () < etime then
-            IO.sleep (max sleep_amount 5. +. Random.float 0.5) >>= fun () ->
+            IO.sleep (min sleep_amount 5. +. Random.float 0.5) >>= fun () ->
             loop (2. *. sleep_amount)
           else
             IO.fail (Error ("could not acquire lock " ^ mutex))

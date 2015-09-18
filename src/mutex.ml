@@ -2,53 +2,60 @@
 exception Error of string
 
 module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
-  open Client
-
   let (>>=) = IO.(>>=)
 
-  let acquire conn ?(atime=10.) ?(ltime=10) mutex id =
+  type with_connection = {
+    with_connection: 'a. (Client.connection -> 'a IO.t) -> 'a IO.t;
+  }
+
+  let acquire ?(atime=10.) ?(ltime=10) {with_connection} mutex id =
     let etime = Unix.gettimeofday () +. atime in
 
-    let update_ttl () =
-      ttl conn mutex >>= function
-        | None -> expire conn mutex ltime >>= fun _ -> IO.return ()
-        | _ -> IO.return () in
-
     let rec loop sleep_amount =
-      setnx conn mutex id >>= function
-      | true ->
-          expire conn mutex ltime >>= fun _ ->
-          IO.return ()
-      | _ ->
-          update_ttl () >>= fun _ ->
-          if Unix.gettimeofday () < etime then
-            IO.sleep (min sleep_amount 5. +. Random.float 0.5) >>= fun () ->
-            loop (2. *. sleep_amount)
+      with_connection (fun conn ->
+        Client.setnx conn mutex id >>= fun acquired ->
+        if acquired then
+          Client.expire conn mutex ltime >>= fun success ->
+          if success then
+            IO.return true
           else
-            IO.fail (Error ("could not acquire lock " ^ mutex))
+            IO.fail (Error ("Could not set expiration for lock " ^ mutex))
+        else
+          IO.return false
+      ) >>= fun success ->
+      if success then
+        IO.return ()
+      else if Unix.gettimeofday () < etime then
+        IO.sleep (min sleep_amount 5. +. Random.float 0.5) >>= fun () ->
+        loop (2. *. sleep_amount)
+      else
+        IO.fail (Error ("Could not acquire lock " ^ mutex))
     in
     loop 0.2
 
   let release conn mutex id =
-    watch conn [mutex] >>= fun _ -> get conn mutex >>= function
-      | Some x when x = id ->
-          multi conn >>= fun _ ->
-          queue (fun () -> del conn [mutex]) >>= fun _ ->
-          exec conn >>= fun _ ->
-          IO.return ()
-      | _ ->
-          unwatch conn >>= fun _ ->
-          IO.fail (Error ("lock was lost: " ^ mutex))
+    Client.watch conn [mutex] >>= fun _ ->
+    Client.get conn mutex >>= function
+    | Some x when x = id ->
+        Client.multi conn >>= fun _ ->
+        Client.queue (fun () -> Client.del conn [mutex]) >>= fun _ ->
+        Client.exec conn >>= fun _ ->
+        IO.return ()
+    | _ ->
+        Client.unwatch conn >>= fun _ ->
+        IO.fail (Error ("lock was lost: " ^ mutex))
 
-  let with_mutex conn ?atime ?ltime mutex fn =
+  let with_mutex ?atime ?ltime with_connection mutex fn =
     let id = Uuidm.(to_string (create `V4)) in
-    acquire conn ?atime ?ltime mutex id >>= fun _ ->
+    acquire ?atime ?ltime with_connection mutex id >>= fun _ ->
     IO.catch
-    (* try *) (fun () ->
-      fn () >>= fun res ->
-      release conn mutex id >>= fun _ ->
-      IO.return res)
-    (* catch *) (function e ->
-      release conn mutex id >>= fun _ ->
-      IO.fail e)
+      (fun () ->
+         fn () >>= fun res ->
+         with_connection.with_connection
+           (fun conn -> release conn mutex id) >>= fun () ->
+         IO.return res)
+      (fun e ->
+         with_connection.with_connection
+           (fun conn -> release conn mutex id) >>= fun () ->
+         IO.fail e)
 end

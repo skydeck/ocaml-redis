@@ -4,6 +4,10 @@ module type IO = sig
   type in_channel
   type out_channel
 
+  val asynchronous : bool
+    (* whether the implementation is asynchronous, i.e. supports the
+       async backgrounding operation. *)
+
   (* Lwt stuff *)
   val (>>=)         : 'a t -> ('a -> 'b t) -> 'b t
   val catch         : (unit -> 'a t) -> (exn -> 'a t) -> 'a t
@@ -11,6 +15,7 @@ module type IO = sig
   val ignore_result : 'a t -> unit
   val return        : 'a -> 'a t
   val fail          : exn -> 'a t
+  val async         : (unit -> 'a t) -> unit
 
   (* Lwt_unix stuff *)
   val socket  : Unix.socket_domain -> Unix.socket_type -> int -> file_descr

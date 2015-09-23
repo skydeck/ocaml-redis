@@ -378,7 +378,8 @@ module Make(IO : Make.IO) = struct
     let command = [ "RENAME"; key; newkey ] in
     send_request connection command >>= return_ok_status
 
-  (* Raises Error if key doesn't exist; returns true if key was renamed, false if newkey already exists. *)
+  (* Raises Error if key doesn't exist; returns true if key was renamed,
+     false if newkey already exists. *)
   let renamenx connection key newkey =
     let command = [ "RENAMENX"; key; newkey ] in
     send_request connection command >>= return_bool

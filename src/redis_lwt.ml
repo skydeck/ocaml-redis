@@ -6,6 +6,8 @@ module IO = struct
   type in_channel = Lwt_chan.in_channel
   type out_channel = Lwt_chan.out_channel
 
+  let asynchronous = true
+
   let (>>=) = Lwt.(>>=)
   let catch = Lwt.catch
   let try_bind = Lwt.try_bind

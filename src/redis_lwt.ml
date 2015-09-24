@@ -39,7 +39,20 @@ module Client = Client.Make(IO)
 module Cache = Cache.Make(IO)(Client)
 module Mutex = Mutex.Make(IO)(Client)
 
-(* Testing *)
+(*
+   Testing
+
+   For now, this how to run the tests:
+
+   ./configure --enable-lwt
+   make
+   make reinstall
+   utop
+   #use "topfind";;
+   #require "redis.lwt";;
+   Redis_lwt.test ();;
+
+ *)
 
 open Printf
 open Lwt

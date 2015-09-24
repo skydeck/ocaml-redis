@@ -1,7 +1,7 @@
-(* error response *)
-exception Error of string
-
 module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
+
+  exception Error of string
+
   let debug = ref false
 
   let (>>=) = IO.(>>=)
@@ -18,11 +18,16 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
   }
 
   let make_tmp_lock_name lock_name owner_id =
-    "tmp_" ^ owner_id ^ lock_name
+    Printf.sprintf "tmp_%s_%s" owner_id lock_name
 
-  let expiration_increment = 5 (* seconds *)
+  let extend_in = 5 (* seconds *)
+  let max_extend_by = extend_in + 2
 
-  let expire conn lock_name time_remaining =
+  let expire conn lock_state time_remaining =
+    let { lock_name; owner_id } = lock_state in
+    if !debug then
+      Printf.printf "[%.3f] expire lock %s in %i seconds, owner %s\n%!"
+        (Unix.gettimeofday ()) lock_name time_remaining owner_id;
     Client.expire conn lock_name time_remaining >>= function
     | true ->
         IO.return ()
@@ -35,35 +40,31 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
      Extend expiration date incrementally in the background
      such that if the process dies, the lock doesn't stay around
      for too long.
-
-     This concerns only long-lasting locks (ltime > 10 seconds).
   *)
   let rec extend_expiration_date with_connection lock_state time_remaining =
-    assert (expiration_increment > 0);
     if time_remaining > 0 && lock_state.is_locked then (
-      assert IO.asynchronous;
-      if time_remaining <= 2 * expiration_increment then
-        (* Set final expiration *)
-        with_connection.with_connection (fun conn ->
-          expire conn lock_state.lock_name time_remaining
-        )
+      (* Extend expiration date by at most 7 seconds,
+         come back in 5 seconds to extend again if needed. *)
+      let extend_by = min time_remaining max_extend_by in
+      let time_remaining_then = time_remaining - extend_in in
+      with_connection.with_connection (fun conn ->
+        expire conn lock_state extend_by
+      );
+      if time_remaining_then > 0 then
+        IO.sleep (float extend_in) >>= fun () ->
+        extend_expiration_date with_connection lock_state time_remaining_then
       else
-        (* Extend expiration date by at most 7 seconds,
-           come back in 5 seconds to extend again if needed. *)
-        let extend_in = expiration_increment in
-        let extend_by = min time_remaining (extend_in + 2) in
-        let time_remaining_then = time_remaining - extend_in in
-        with_connection.with_connection (fun conn ->
-          expire conn lock_state.lock_name extend_by
-        );
-        if time_remaining_then > 0 then
-          IO.sleep (float extend_in) >>= fun () ->
-          extend_expiration_date with_connection lock_state time_remaining_then
-        else
-          IO.return ()
+        IO.return ()
     )
     else
       IO.return ()
+
+  let delete conn lock_name =
+    if !debug then
+      Printf.printf "[%.3f] delete lock %s\n%!"
+        (Unix.gettimeofday ()) lock_name;
+    Client.del conn [lock_name] >>= fun i ->
+    IO.return ()
 
   (*
      Try to acquire a lock once, returning true if successful.
@@ -74,14 +75,18 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
     if !debug then
       Printf.printf "[%.3f] try acquire %s by %s\n%!"
         (Unix.gettimeofday ()) lock_name owner_id;
+
     let initial_lock_time =
-      if IO.asynchronous then ltime
-      else min ltime expiration_increment
+      if not IO.asynchronous then ltime
+      else min ltime max_extend_by
     in
-    let time_remaining = ltime - initial_lock_time in
-    assert (time_remaining >= 0);
     with_connection.with_connection (fun conn ->
       let tmp_lock_name = make_tmp_lock_name lock_name owner_id in
+      if !debug then
+        Printf.printf "[%.3f] \
+          create temporary lock %s, expires in %i seconds\n%!"
+          (Unix.gettimeofday ())
+          tmp_lock_name initial_lock_time;
       Client.setex conn tmp_lock_name ltime owner_id >>= fun () ->
       (* if a crash occurs here, only the temporary lock remains,
          which doesn't block anyone *)
@@ -89,15 +94,18 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
         (fun () ->
           (* rename lock to the desired name,
              failing if it already exists *)
-          Client.renamenx conn tmp_lock_name lock_name
+           if !debug then
+             Printf.printf "[%.3f] try rename lock %s -> %s\n%!"
+               (Unix.gettimeofday ()) tmp_lock_name lock_name;
+           Client.renamenx conn tmp_lock_name lock_name
         )
         (fun e ->
-           Client.del conn [tmp_lock_name] >>= fun i ->
+           delete conn tmp_lock_name >>= fun () ->
            IO.fail e
         )
       >>= fun acquired ->
       if not acquired then
-        Client.del conn [tmp_lock_name] >>= fun i ->
+        delete conn tmp_lock_name >>= fun () ->
         IO.return None
       else (
         if !debug then
@@ -108,12 +116,18 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
           owner_id;
           is_locked = true;
         } in
-        if IO.asynchronous then
-          IO.async (fun () ->
-            extend_expiration_date with_connection lock_state time_remaining
+        let time_remaining_then = ltime - extend_in in
+        if IO.asynchronous then (
+          if time_remaining_then > 0 then (
+            IO.async (fun () ->
+              IO.sleep (float extend_in) >>= fun () ->
+              extend_expiration_date
+                with_connection lock_state time_remaining_then
+            )
           )
+        )
         else
-          assert (time_remaining = 0);
+          assert (time_remaining_then = 0);
         IO.return (Some lock_state)
       )
     )
@@ -140,19 +154,19 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
     loop 0.2
 
   let release conn lock_state =
-    (* signal background job to not extend the lock's expiration time *)
+    (* Signal background job to not extend the lock's expiration time *)
     lock_state.is_locked <- false;
     let {lock_name; owner_id} = lock_state in
     Client.watch conn [lock_name] >>= fun _ ->
     Client.get conn lock_name >>= function
     | Some x when x = owner_id ->
         Client.multi conn >>= fun _ ->
-        Client.queue (fun () -> Client.del conn [lock_name]) >>= fun _ ->
+        Client.queue (fun () -> delete conn lock_name) >>= fun () ->
         Client.exec conn >>= fun _ ->
         IO.return ()
     | _ ->
         Client.unwatch conn >>= fun _ ->
-        IO.fail (Error ("lock was lost: " ^ lock_name))
+        IO.fail (Error ("Lock was lost: " ^ lock_name))
 
   let with_mutex ?atime ?ltime with_connection lock_name fn =
     let owner_id = Uuidm.(to_string (create `V4)) in
@@ -165,6 +179,9 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
            (fun conn -> release conn lock_state) >>= fun () ->
          IO.return res)
       (fun e ->
+         if !debug then
+           Printf.printf "[%.3f] exception with lock %s: %s\n%!"
+             (Unix.gettimeofday ()) lock_name (Printexc.to_string e);
          with_connection.with_connection
            (fun conn -> release conn lock_state) >>= fun () ->
          IO.fail e)

@@ -1,8 +1,8 @@
-exception Error of string
-
 module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) : sig
 
   val debug : bool ref
+
+  exception Error of string
 
   type with_connection = {
     with_connection: 'a. (Client.connection -> 'a IO.t) -> 'a IO.t;

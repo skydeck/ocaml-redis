@@ -130,11 +130,29 @@ let test_long () =
     && t <= 3. *. (job_duration +. 2. *. max_acquisition_time)
   )
 
+let test_expire () =
+  catch
+    (fun () ->
+       Mutex.with_mutex ~atime:0.1 ~ltime:11 wc "test_expire" (fun () ->
+         Lwt_unix.sleep 12.
+       ) >>= fun () ->
+       return false
+    )
+    (function
+      | (Mutex.Error _ as e) ->
+          printf "[%.3f] Expected lock timeout: %s\n%!"
+            (Unix.gettimeofday ()) (Printexc.to_string e);
+          return true
+      | e ->
+          raise e
+    )
+
 let tests = [
   "sequence", test_sequence;
   "exception", test_exception;
   "short", test_short;
   "long", test_long;
+  "expire", test_expire;
 ]
 
 let run_tests test_list =

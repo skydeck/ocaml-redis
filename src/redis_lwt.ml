@@ -35,7 +35,7 @@ module IO = struct
   let fold_left = Lwt_util.fold_left
 end
 
-module Client = Client.Make(IO)
+module Client = Client.Make(IO) with 
 module Cache = Cache.Make(IO)(Client)
 module Mutex = Mutex.Make(IO)(Client)
 

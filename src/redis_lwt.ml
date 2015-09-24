@@ -153,8 +153,7 @@ let test_expire () =
     )
     (function
       | (Mutex.Error _ as e) ->
-          printf "[%.3f] Expected lock timeout: %s\n%!"
-            (Unix.gettimeofday ()) (Printexc.to_string e);
+          printf "Expected lock timeout: %s\n%!" (Printexc.to_string e);
           return true
       | e ->
           raise e

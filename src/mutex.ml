@@ -22,36 +22,55 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
 
   let expiration_increment = 5 (* seconds *)
 
+  let expire conn lock_name time_remaining =
+    Client.expire conn lock_name time_remaining >>= function
+    | true ->
+        IO.return ()
+    | false ->
+        IO.fail (
+          Error ("Could not extend expiration of lock " ^ lock_name)
+        )
+
   (*
      Extend expiration date incrementally in the background
      such that if the process dies, the lock doesn't stay around
      for too long.
+
+     This concerns only long-lasting locks (ltime > 10 seconds).
   *)
   let rec extend_expiration_date with_connection lock_state time_remaining =
     assert (expiration_increment > 0);
     if time_remaining > 0 && lock_state.is_locked then (
       assert IO.asynchronous;
-      IO.async
-        (fun () ->
-           if time_remaining < 2 * expiration_increment then
-             with_connection (fun conn ->
-               Client.expire conn lock_state.lock_name time_remaining
-             )
-           else
-             IO.sleep (float expiration_increment) >>= fun () ->
-             with_connection (fun conn ->
-               Client.expire conn lock_state.lock_name
-                 (time_remaining - expiration_increment)
-            )
+      if time_remaining <= 2 * expiration_increment then
+        (* Set final expiration *)
+        with_connection.with_connection (fun conn ->
+          expire conn lock_state.lock_name time_remaining
         )
+      else
+        (* Extend expiration date by at most 7 seconds,
+           come back in 5 seconds to extend again if needed. *)
+        let extend_in = expiration_increment in
+        let extend_by = min time_remaining (extend_in + 2) in
+        let time_remaining_then = time_remaining - extend_in in
+        with_connection.with_connection (fun conn ->
+          expire conn lock_state.lock_name extend_by
+        );
+        if time_remaining_then > 0 then
+          IO.sleep (float extend_in) >>= fun () ->
+          extend_expiration_date with_connection lock_state time_remaining_then
+        else
+          IO.return ()
     )
+    else
+      IO.return ()
 
   (*
      Try to acquire a lock once, returning true if successful.
      Propagate exceptions if redis is not functioning as it should.
      The lock is guaranteed to expire.
   *)
-  let try_acquire ltime {with_connection} lock_name owner_id =
+  let try_acquire ltime with_connection lock_name owner_id =
     if !debug then
       Printf.printf "[%.3f] try acquire %s by %s\n%!"
         (Unix.gettimeofday ()) lock_name owner_id;
@@ -61,7 +80,7 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
     in
     let time_remaining = ltime - initial_lock_time in
     assert (time_remaining >= 0);
-    with_connection (fun conn ->
+    with_connection.with_connection (fun conn ->
       let tmp_lock_name = make_tmp_lock_name lock_name owner_id in
       Client.setex conn tmp_lock_name ltime owner_id >>= fun () ->
       (* if a crash occurs here, only the temporary lock remains,
@@ -90,7 +109,9 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
           is_locked = true;
         } in
         if IO.asynchronous then
-          extend_expiration_date with_connection lock_state time_remaining
+          IO.async (fun () ->
+            extend_expiration_date with_connection lock_state time_remaining
+          )
         else
           assert (time_remaining = 0);
         IO.return (Some lock_state)

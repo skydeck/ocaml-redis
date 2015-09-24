@@ -230,7 +230,7 @@ module Make(IO : Make.IO) = struct
     return_bulk reply >>= function
       | Some b ->
           let fields = String.nsplit b "\r\n" in
-          let fields = List.filter (fun x -> x <> "") fields in
+          let fields = List.filter (fun x -> x <> "" && not (String.starts_with x "#") ) fields in
           IO.return (List.map (fun f -> String.split f ":") fields)
       | None   -> IO.return []
 
@@ -378,7 +378,8 @@ module Make(IO : Make.IO) = struct
     let command = [ "RENAME"; key; newkey ] in
     send_request connection command >>= return_ok_status
 
-  (* Raises Error if key doesn't exist; returns true if key was renamed, false if newkey already exists. *)
+  (* Raises Error if key doesn't exist; returns true if key was renamed,
+     false if newkey already exists. *)
   let renamenx connection key newkey =
     let command = [ "RENAMENX"; key; newkey ] in
     send_request connection command >>= return_bool

@@ -4,12 +4,15 @@ module IO : sig
   type in_channel = Pervasives.in_channel
   type out_channel = Pervasives.out_channel
 
+  val asynchronous : bool
+
   val (>>=) : 'a -> ('a -> 'b) -> 'b
   val catch : (unit -> 'a) -> (exn -> 'a) -> 'a
   val try_bind : (unit -> 'a) -> ('a -> 'b) -> (exn -> 'b) -> 'b
   val ignore_result : 'a -> unit
   val return : 'a -> 'a
   val fail : exn -> 'a
+  val async : (unit -> 'a) -> unit
 
   val socket : Unix.socket_domain -> Unix.socket_type -> int -> file_descr
   val connect : file_descr -> Unix.sockaddr -> unit

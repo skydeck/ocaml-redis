@@ -4,12 +4,16 @@ module IO = struct
   type in_channel = Pervasives.in_channel
   type out_channel = Pervasives.out_channel
 
+  let asynchronous = false
+
   let (>>=) a f = f a
   let catch f exn_handler = try f () with e -> exn_handler e
-  let try_bind f bind_handler exn_handler = try f () >>= bind_handler with e -> exn_handler e
+  let try_bind f bind_handler exn_handler =
+    try f () >>= bind_handler with e -> exn_handler e
   let ignore_result = ignore
   let return a = a
   let fail e = raise e
+  let async f = ignore (f ())
 
   let socket = Unix.socket
   let connect = Unix.connect

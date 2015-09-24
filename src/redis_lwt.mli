@@ -6,14 +6,19 @@ module IO : sig
   type in_channel = Lwt_chan.in_channel
   type out_channel = Lwt_chan.out_channel
 
+  val asynchronous : bool
+
   val (>>=) : 'a Lwt.t -> ('a -> 'b Lwt.t) -> 'b Lwt.t
   val catch : (unit -> 'a Lwt.t) -> (exn -> 'a Lwt.t) -> 'a Lwt.t
-  val try_bind : (unit -> 'a Lwt.t) -> ('a -> 'b Lwt.t) -> (exn -> 'b Lwt.t) -> 'b Lwt.t
+  val try_bind :
+    (unit -> 'a Lwt.t) -> ('a -> 'b Lwt.t) -> (exn -> 'b Lwt.t) -> 'b Lwt.t
   val ignore_result : 'a Lwt.t -> unit
   val return : 'a -> 'a Lwt.t
   val fail : exn -> 'a Lwt.t
+  val async : (unit -> 'a t) -> unit
 
-  val socket : Lwt_unix.socket_domain -> Lwt_unix.socket_type -> int -> file_descr
+  val socket :
+    Lwt_unix.socket_domain -> Lwt_unix.socket_type -> int -> file_descr
   val connect : file_descr -> Lwt_unix.sockaddr -> unit Lwt.t
   val close : file_descr -> unit Lwt.t
   val sleep : float -> unit Lwt.t
@@ -35,3 +40,7 @@ end
 module Client : module type of Client.Make(IO)
 module Cache : module type of Cache.Make(IO)(Client)
 module Mutex : module type of Mutex.Make(IO)(Client)
+
+val tests : (string * (unit -> bool Lwt.t)) list
+val run_tests : (string * (unit -> bool Lwt.t)) list -> unit
+val test : unit -> unit

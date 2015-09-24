@@ -2,6 +2,8 @@
 exception Error of string
 
 module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
+  let debug = ref false
+
   let (>>=) = IO.(>>=)
 
   type with_connection = {
@@ -50,6 +52,9 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
      The lock is guaranteed to expire.
   *)
   let try_acquire ltime {with_connection} lock_name owner_id =
+    if !debug then
+      Printf.printf "[%.3f] try acquire %s by %s\n%!"
+        (Unix.gettimeofday ()) lock_name owner_id;
     let initial_lock_time =
       if IO.asynchronous then ltime
       else min ltime expiration_increment
@@ -76,6 +81,9 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
         Client.del conn [tmp_lock_name] >>= fun i ->
         IO.return None
       else (
+        if !debug then
+          Printf.printf "[%.3f] acquired %s by %s\n%!"
+            (Unix.gettimeofday ()) lock_name owner_id;
         let lock_state = {
           lock_name;
           owner_id;
@@ -103,7 +111,7 @@ module Make(IO : Make.IO)(Client : module type of Client.Make(IO)) = struct
           IO.return lock_state
       | None ->
           if Unix.gettimeofday () < etime then
-            IO.sleep (min sleep_amount 5. +. Random.float 0.5) >>= fun () ->
+            IO.sleep (min sleep_amount 5. +. Random.float 0.1) >>= fun () ->
             loop (2. *. sleep_amount)
           else
             IO.fail (Error ("Could not acquire lock " ^ lock_name))
